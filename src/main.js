@@ -7,6 +7,14 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9cdcd4); // Matching the HTML background color
 
+// Add a grid helper to visualize the scene
+const gridHelper = new THREE.GridHelper(10, 10);
+scene.add(gridHelper);
+
+// Add axes helper to visualize orientation
+const axesHelper = new THREE.AxesHelper(5);
+scene.add(axesHelper);
+
 // Create camera
 const camera = new THREE.PerspectiveCamera(
     75,
@@ -14,7 +22,8 @@ const camera = new THREE.PerspectiveCamera(
     0.1,
     1000
 );
-camera.position.z = 5;
+camera.position.set(0, 2, 5); // Position camera higher and closer
+camera.lookAt(0, 0, 0);
 
 // Create renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -38,6 +47,9 @@ scene.add(directionalLight);
 // Create a group to hold our model
 const modelGroup = new THREE.Group();
 scene.add(modelGroup);
+
+// Add animation mixer
+let mixer = null;
 
 // Setup loaders
 const textureLoader = new THREE.TextureLoader();
@@ -140,71 +152,74 @@ function loadModel(modelPath, texturePath = null, mixFactor = 0.5) {
 
             const model = gltf.scene;
             
-            // Center the model
-            const box = new THREE.Box3().setFromObject(model);
-            const center = box.getCenter(new THREE.Vector3());
-            model.position.sub(center);
+            // Debug: Log model structure
+            console.log('Model loaded, structure:', model);
+            model.traverse((child) => {
+                if (child.isMesh) {
+                    console.log('Mesh found:', child.name, 'position:', child.position, 'visible:', child.visible);
+                    // Make sure the mesh is visible and has a material
+                    child.visible = true;
+                    if (!child.material) {
+                        child.material = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+                    }
+                }
+            });
             
-            // Scale the model to a reasonable size
+            // Check for animations
+            if (gltf.animations && gltf.animations.length > 0) {
+                console.log('Found animations:', gltf.animations.length);
+                mixer = new THREE.AnimationMixer(model);
+                gltf.animations.forEach((clip, index) => {
+                    console.log(`Animation ${index}:`, clip.name, 'duration:', clip.duration);
+                    const action = mixer.clipAction(clip);
+                    action.play();
+                });
+            } else {
+                console.log('No animations found in the model');
+            }
+            
+            // Get the bounding box before any transformations
+            const box = new THREE.Box3().setFromObject(model);
             const size = box.getSize(new THREE.Vector3());
+            console.log('Original model size:', size);
+            
+            // Make the model much smaller - scale to fit within 1 unit
             const maxDim = Math.max(size.x, size.y, size.z);
-            const scale = 2 / maxDim;
-            model.scale.multiplyScalar(scale);
+            const scale = 0.1 / maxDim; // Make model very small
+            model.scale.set(scale, scale, scale);
+            
+            // Reset position and rotation
+            model.position.set(0, 0, 0);
+            // Rotate the model 90 degrees to face forward (assuming model faces -Z by default)
+            model.rotation.set(0, 0, 0);
+            
+            // Get new bounding box after scaling
+            const newBox = new THREE.Box3().setFromObject(model);
+            const newSize = newBox.getSize(new THREE.Vector3());
+            console.log('Scaled model size:', newSize);
+            
+            // Center the model
+            const center = newBox.getCenter(new THREE.Vector3());
+            model.position.sub(center);
             
             // Add the model to the scene
             modelGroup.add(model);
             
-            // Apply texture if provided
-            if (texturePath) {
-                console.log('Applying texture during model load:', texturePath);
-                const loader = new THREE.TextureLoader(loadingManager);
-                loader.load(
-                    texturePath,
-                    (overlayTexture) => {
-                        console.log('Texture loaded successfully');
-                        overlayTexture.encoding = THREE.sRGBEncoding;
-                        overlayTexture.flipY = false;
-                        
-                        model.traverse((child) => {
-                            if (child.isMesh) {
-                                console.log('Applying texture to mesh:', child.name);
-                                if (child.material) {
-                                    const originalMaterial = child.material;
-                                    const newMaterial = new THREE.MeshStandardMaterial({
-                                        map: originalMaterial.map,
-                                        color: 0xffffff,
-                                        metalness: originalMaterial.metalness,
-                                        roughness: originalMaterial.roughness,
-                                        normalMap: originalMaterial.normalMap,
-                                        aoMap: originalMaterial.aoMap,
-                                        aoMapIntensity: originalMaterial.aoMapIntensity,
-                                    });
-
-                                    newMaterial.emissiveMap = overlayTexture;
-                                    newMaterial.emissiveIntensity = mixFactor;
-                                    newMaterial.emissive = new THREE.Color(0xffffff);
-                                    
-                                    child.material = newMaterial;
-                                }
-                            }
-                        });
-                    },
-                    (xhr) => {
-                        console.log((xhr.loaded / xhr.total * 100) + '% texture loaded');
-                    },
-                    (error) => {
-                        console.error('Error loading texture:', error);
-                    }
-                );
-            }
+            // Position the model slightly above the ground
+            modelGroup.position.y = 0.5;
             
-            // Adjust camera to fit model
-            const radius = Math.max(size.x, size.y, size.z) * 2;
-            camera.position.z = radius;
-            controls.target.set(0, 0, 0);
+            // Update camera to look at the model
+            camera.position.set(0, 2, 5);
+            controls.target.set(0, 0.5, 0);
             controls.update();
             
-            console.log('Model loaded successfully');
+            console.log('Model loaded and positioned:', {
+                position: modelGroup.position,
+                scale: model.scale,
+                rotation: modelGroup.rotation,
+                camera: camera.position,
+                target: controls.target
+            });
         },
         (progress) => {
             console.log('Loading progress:', (progress.loaded / progress.total * 100) + '%');
@@ -224,41 +239,35 @@ window.addEventListener('resize', () => {
 
 // Animation state
 let time = 0;
-const walkRadius = 3; // Radius of the walking circle
-const walkSpeed = 0.3; // Slower speed for more natural movement
-let currentRotation = 0; // Track current rotation for smooth turning
-const rotationSpeed = 0.05; // How quickly the dinosaur turns
+const walkRadius = .5; // Much smaller radius
+const walkSpeed = 0.03;
 
 // Animation loop
 function animate() {
     requestAnimationFrame(animate);
     
     // Update time
-    time += 0.016; // Approximately 60fps
+    time += 0.016;
+    
+    // Update animation mixer if it exists
+    if (mixer) {
+        mixer.update(0.016);
+    }
     
     if (modelGroup.children.length > 0) {
         // Calculate new position on the circle
         const x = Math.cos(time * walkSpeed) * walkRadius;
         const z = Math.sin(time * walkSpeed) * walkRadius;
         
-        // Calculate target rotation (where the dinosaur should face)
-        const targetRotation = Math.atan2(z, x) + Math.PI/2;
+        // Calculate movement direction (tangent to the circle)
+        const dirX = -Math.sin(time * walkSpeed);
+        const dirZ = Math.cos(time * walkSpeed);
         
-        // Smoothly interpolate current rotation to target rotation
-        const rotationDiff = targetRotation - currentRotation;
+        // Update position
+        modelGroup.position.set(x, 0.5, z);
         
-        // Normalize the rotation difference to be between -PI and PI
-        const normalizedDiff = ((rotationDiff + Math.PI) % (Math.PI * 2)) - Math.PI;
-        
-        // Gradually adjust current rotation
-        currentRotation += normalizedDiff * rotationSpeed;
-        
-        // Move the model
-        modelGroup.position.x = x;
-        modelGroup.position.z = z;
-        
-        // Apply the smoothed rotation
-        modelGroup.rotation.y = currentRotation;
+        // Make model face movement direction
+        modelGroup.rotation.y = Math.atan2(dirX, dirZ);
     }
     
     controls.update();
@@ -268,7 +277,7 @@ function animate() {
 animate();
 
 // Load the dinosaur model with texture
-loadModel('/models/dino-1.glb', 'textures/dino-1.png', 0.8);
+loadModel('/models/bunny-1.glb', 'textures/dino-1.png', 0.8);
 
 // Export the functions to the console
 window.loadModel = loadModel;
@@ -278,6 +287,22 @@ window.applyTexture = (texturePath, mixFactor = 0.5) => {
         applyTexture(modelGroup.children[0], texturePath, mixFactor);
     } else {
         console.error('No model loaded to apply texture to');
+    }
+};
+
+// Add function to control animations
+window.playAnimation = (index = 0) => {
+    if (mixer && mixer._actions.length > 0) {
+        const action = mixer._actions[index];
+        if (action) {
+            action.reset();
+            action.play();
+            console.log('Playing animation:', action.getClip().name);
+        } else {
+            console.error('Animation index out of range');
+        }
+    } else {
+        console.error('No animations available');
     }
 };
 
