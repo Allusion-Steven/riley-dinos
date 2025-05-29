@@ -281,9 +281,3 @@ window.applyTexture = (texturePath, mixFactor = 0.5) => {
     }
 };
 
-// Apply the overlay texture after a short delay
-setTimeout(() => {
-    console.log('Attempting to apply overlay texture...');
-    // Make sure we're passing the correct parameters
-    applyTexture('textures/dino-1.png', 0.8);
-}, 1000); 
