@@ -15,6 +15,18 @@ scene.add(gridHelper);
 const axesHelper = new THREE.AxesHelper(5);
 scene.add(axesHelper);
 
+// Create ground plane
+const groundGeometry = new THREE.PlaneGeometry(20, 20);
+const groundMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x4caf50,
+    roughness: 0.8,
+    metalness: 0.2
+});
+const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+ground.rotation.x = -Math.PI / 2; // Rotate to be horizontal
+ground.position.y = 0; // Position at y=0
+scene.add(ground);
+
 // Create camera
 const camera = new THREE.PerspectiveCamera(
     75,
@@ -31,11 +43,6 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
 
-// Add orbit controls
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.05;
-
 // Add lights
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
 scene.add(ambientLight);
@@ -50,6 +57,9 @@ scene.add(modelGroup);
 
 // Add animation mixer
 let mixer = null;
+
+// Animation state
+let currentAction = null;
 
 // Setup loaders
 const textureLoader = new THREE.TextureLoader();
@@ -91,7 +101,7 @@ function applyTexture(model, texturePath, mixFactor = 0.5) {
             texturePath,
             (overlayTexture) => {
                 console.log('Overlay texture loaded successfully');
-                overlayTexture.encoding = THREE.sRGBEncoding;
+                overlayTexture.colorSpace = THREE.SRGBColorSpace;
                 overlayTexture.flipY = false;
                 
                 // Apply texture to all meshes in the model
@@ -110,12 +120,17 @@ function applyTexture(model, texturePath, mixFactor = 0.5) {
                                 normalMap: originalMaterial.normalMap,
                                 aoMap: originalMaterial.aoMap,
                                 aoMapIntensity: originalMaterial.aoMapIntensity,
+                                transparent: true,
+                                opacity: 1.0
                             });
 
                             // Add the overlay texture as an emissive map
                             newMaterial.emissiveMap = overlayTexture;
                             newMaterial.emissiveIntensity = mixFactor;
                             newMaterial.emissive = new THREE.Color(0xffffff);
+                            
+                            // Ensure the material is properly configured
+                            newMaterial.needsUpdate = true;
                             
                             child.material = newMaterial;
                             console.log('Overlay material created for mesh:', child.name);
@@ -169,11 +184,11 @@ function loadModel(modelPath, texturePath = null, mixFactor = 0.5) {
             if (gltf.animations && gltf.animations.length > 0) {
                 console.log('Found animations:', gltf.animations.length);
                 mixer = new THREE.AnimationMixer(model);
-                gltf.animations.forEach((clip, index) => {
-                    console.log(`Animation ${index}:`, clip.name, 'duration:', clip.duration);
-                    const action = mixer.clipAction(clip);
-                    action.play();
-                });
+                // Store the first animation but don't play it yet
+                if (gltf.animations[0]) {
+                    currentAction = mixer.clipAction(gltf.animations[0]);
+                    currentAction.stop(); // Ensure it's not playing initially
+                }
             } else {
                 console.log('No animations found in the model');
             }
@@ -190,7 +205,6 @@ function loadModel(modelPath, texturePath = null, mixFactor = 0.5) {
             
             // Reset position and rotation
             model.position.set(0, 0, 0);
-            // Rotate the model 90 degrees to face forward (assuming model faces -Z by default)
             model.rotation.set(0, 0, 0);
             
             // Get new bounding box after scaling
@@ -210,15 +224,18 @@ function loadModel(modelPath, texturePath = null, mixFactor = 0.5) {
             
             // Update camera to look at the model
             camera.position.set(0, 2, 5);
-            controls.target.set(0, 0.5, 0);
-            controls.update();
+            
+            // Apply texture if provided
+            if (texturePath) {
+                console.log('Applying texture:', texturePath);
+                applyTexture(model, texturePath, mixFactor);
+            }
             
             console.log('Model loaded and positioned:', {
                 position: modelGroup.position,
                 scale: model.scale,
                 rotation: modelGroup.rotation,
-                camera: camera.position,
-                target: controls.target
+                camera: camera.position
             });
         },
         (progress) => {
@@ -237,17 +254,66 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// Animation state
-let time = 0;
-const walkRadius = .5; // Much smaller radius
-const walkSpeed = 0.03;
+// Movement state
+const moveSpeed = 0.01;
+const turnSpeed = 0.05;
+const keys = {
+    forward: false,
+    backward: false,
+    left: false,
+    right: false
+};
+
+// Camera settings
+const cameraOffset = new THREE.Vector3(0, 0.3, 0.8); // Increased height for downward angle
+const cameraLookOffset = new THREE.Vector3(0, 0.1, 0); // Lower look target to look down at model
+
+// Handle keyboard input
+window.addEventListener('keydown', (event) => {
+    switch(event.key.toLowerCase()) {
+        case 'w':
+        case 'arrowup':
+            keys.forward = true;
+            break;
+        case 's':
+        case 'arrowdown':
+            keys.backward = true;
+            break;
+        case 'a':
+        case 'arrowleft':
+            keys.left = true;
+            break;
+        case 'd':
+        case 'arrowright':
+            keys.right = true;
+            break;
+    }
+});
+
+window.addEventListener('keyup', (event) => {
+    switch(event.key.toLowerCase()) {
+        case 'w':
+        case 'arrowup':
+            keys.forward = false;
+            break;
+        case 's':
+        case 'arrowdown':
+            keys.backward = false;
+            break;
+        case 'a':
+        case 'arrowleft':
+            keys.left = false;
+            break;
+        case 'd':
+        case 'arrowright':
+            keys.right = false;
+            break;
+    }
+});
 
 // Animation loop
 function animate() {
     requestAnimationFrame(animate);
-    
-    // Update time
-    time += 0.016;
     
     // Update animation mixer if it exists
     if (mixer) {
@@ -255,29 +321,56 @@ function animate() {
     }
     
     if (modelGroup.children.length > 0) {
-        // Calculate new position on the circle
-        const x = Math.cos(time * walkSpeed) * walkRadius;
-        const z = Math.sin(time * walkSpeed) * walkRadius;
+        // Handle rotation
+        if (keys.left) {
+            modelGroup.rotation.y += turnSpeed;
+        }
+        if (keys.right) {
+            modelGroup.rotation.y -= turnSpeed;
+        }
         
-        // Calculate movement direction (tangent to the circle)
-        const dirX = -Math.sin(time * walkSpeed);
-        const dirZ = Math.cos(time * walkSpeed);
+        // Handle movement and animation
+        if (keys.forward || keys.backward) {
+            const direction = keys.forward ? 1 : -1;
+            modelGroup.position.x += Math.sin(modelGroup.rotation.y) * moveSpeed * direction;
+            modelGroup.position.z += Math.cos(modelGroup.rotation.y) * moveSpeed * direction;
+            
+            // Play animation when moving
+            if (currentAction && !currentAction.isRunning()) {
+                currentAction.reset();
+                currentAction.play();
+            }
+        } else {
+            // Stop animation when not moving
+            if (currentAction && currentAction.isRunning()) {
+                currentAction.stop();
+            }
+        }
         
-        // Update position
-        modelGroup.position.set(x, 0.5, z);
+        // Update camera position to follow character
+        const cameraPosition = new THREE.Vector3();
+        cameraPosition.copy(modelGroup.position);
         
-        // Make model face movement direction
-        modelGroup.rotation.y = Math.atan2(dirX, dirZ);
+        // Add fixed offset without rotation
+        cameraPosition.add(cameraOffset);
+        
+        // Update camera
+        camera.position.copy(cameraPosition);
+        
+        // Calculate look target
+        const lookTarget = new THREE.Vector3();
+        lookTarget.copy(modelGroup.position);
+        lookTarget.add(cameraLookOffset);
+        camera.lookAt(lookTarget);
     }
     
-    controls.update();
     renderer.render(scene, camera);
 }
 
 animate();
 
 // Load the dinosaur model with texture
-loadModel('/models/bunny-1.glb', 'textures/dino-1.png', 0.8);
+loadModel('/models/bunny-1.glb', 'textures/dino-1.png', 0.5);
 
 // Export the functions to the console
 window.loadModel = loadModel;
