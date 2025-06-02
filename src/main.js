@@ -209,7 +209,7 @@ function loadModel(modelPath, texturePath = null, mixFactor = 0.5) {
             
             // Get new bounding box after scaling
             const newBox = new THREE.Box3().setFromObject(model);
-            const newSize = newBox.getSize(new THREE.Vector3());
+            const newSize = newBox.getSize(new THREE.Vector3() );
             console.log('Scaled model size:', newSize);
             
             // Center the model
@@ -221,6 +221,7 @@ function loadModel(modelPath, texturePath = null, mixFactor = 0.5) {
             
             // Position the model slightly above the ground
             modelGroup.position.y = 0.5;
+            modelGroup.scale.set(10, 10, 10);
             
             // Update camera to look at the model
             camera.position.set(0, 2, 5);
@@ -370,7 +371,7 @@ function animate() {
 animate();
 
 // Load the dinosaur model with texture
-loadModel('/models/bunny-1.glb', 'textures/dino-1.png', 0.5);
+loadModel('/models/trex_v3.glb', 'textures/dino-1.png', 0.1);
 
 // Export the functions to the console
 window.loadModel = loadModel;
